@@ -1,0 +1,143 @@
+// (1) Extraction of the file name and creation of directories if they do not exist
+rawID = getImageID();
+title = getTitle();
+dir = getDirectory("image");
+
+dotIndex = lastIndexOf(title, ".");
+if (dotIndex != -1) {
+    baseName = substring(title, 0, dotIndex);
+} else {
+    baseName = title;
+}
+
+csvPath = dir + "Results_GUS.csv";
+dirLeaf = dir + "BinaryMask-Leaf" + File.separator;
+dirGUS  = dir + "BinaryMask-GUS" + File.separator;
+
+if (!File.exists(dirLeaf)) File.makeDirectory(dirLeaf);
+if (!File.exists(dirGUS))  File.makeDirectory(dirGUS);
+
+run("Set Measurements...", "area mean standard min max median integrated limit redirect=None decimal=3");
+
+// (2) Measurement of leaf area
+selectImage(rawID);
+run("Duplicate...", " ");
+leafImageID = getImageID();
+
+run("ROI Manager...");
+roiManager("Reset");
+roiManager("Add");
+roiManager("Select", 0);
+roiManager("Rename", "leaf");
+
+run("Create Mask");
+saveAs("Tiff", dirLeaf + baseName + "_mask_leaf.tif");
+
+run("Measure");
+areaLeaf = getResult("Area", nResults - 1);
+close();
+
+// (3) Measurement of GUS signal area
+selectImage(rawID);
+run("Duplicate...", " ");
+gusTempID = getImageID();
+run("Split Channels");
+
+blue = nImages;
+selectImage(blue);
+close();
+green = nImages;
+selectImage(green);
+close();
+red = nImages;
+selectImage(red);
+run("8-bit");
+
+setAutoThreshold("Default no-reset");
+setThreshold(0, 85);
+run("Convert to Mask");
+
+saveAs("Tiff", dirGUS + baseName + "_mask_GUS.tif");
+
+run("Select None");
+run("Analyze Particles...", "add");
+
+n = roiManager("count");
+
+if (n > 1) {
+    // If GUS particles were detected (indices 1 to n−1)
+    allIndices = Array.getSequence(n);
+    indices = Array.slice(allIndices, 1); 
+
+    roiManager("Select", indices);
+    roiManager("Combine");
+    roiManager("Add");
+    roiManager("Select", n);
+    roiManager("Rename", "GUS_combined");
+    GUSIndex = roiManager("count") - 1;
+} else {
+    // No GUS particles detected below the threshold of 85
+    print("No GUS signal detected below the threshold for " + title);
+    GUSIndex = -1;
+}
+
+// (4) Measurement of GUS signal intensity
+selectImage(rawID);
+run("Duplicate...", " ");
+run("8-bit");
+run("Invert");
+
+n = roiManager("count");
+
+leafIndex = -1;
+for (i=0; i<n; i++) {
+    roiManager("Select", i);
+    currentName = Roi.getName(); 
+    if (currentName == "leaf") {
+        leafIndex = i;
+    }
+}
+
+if (leafIndex == -1) {
+    exit("Error: The ROI named 'leaf' was not found.");
+}
+
+areaGUS = 0;
+medianGUS = 0;
+stdDevGUS = 0;
+maxGUS = 0;
+meanGUS = 0;
+
+if (GUSIndex != -1) {
+    // Intersect the leaf blade and GUS regions
+    roiManager("Select", newArray(leafIndex, GUSIndex));
+    roiManager("AND");
+    roiManager("Add");
+
+    roiManager("Show None");
+
+    n = roiManager("count");
+    roiManager("Select", n-1);
+    run("Measure");
+
+    areaGUS = getResult("Area", nResults - 1);
+    meanGUS = getResult("Mean", nResults - 1);
+    medianGUS = getResult("Median", nResults - 1);
+    stdDevGUS = getResult("StdDev", nResults - 1);
+    maxGUS = getResult("Max", nResults - 1); 
+}
+
+close();
+roiManager("Reset");
+
+// (5) Addition to the .csv file
+if (!File.exists(csvPath)) {
+    header = "Image_Name,Area_Leaf,Area_GUS,Median_Intensity_GUS,StdDev_GUS,Max_Intensity_GUS,Mean_Intensity_GUS";
+    File.append(header, csvPath);
+}
+
+lineData = baseName + "," + areaLeaf + "," + areaGUS + "," + medianGUS + "," + stdDevGUS + "," + maxGUS + "," + meanGUS;
+File.append(lineData, csvPath);
+print("Recording completed")
+
+//close();
